@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Szachy ze Stockfishem</title>
+<style>
+:root{--bg:#f3f3f3;--tx:#1e1e1e;--ctl:#fff;--bd:#aaa;--lt:#f0d9b5;--dk:#b58863;--bb:#e1e1e1;--mv:#fff;--mu:#777}
+[data-theme=dark]{--bg:#262421;--tx:#e1e1e1;--ctl:#3a3733;--bd:#5f5f5f;--lt:#97aab8;--dk:#546a7d;--bb:#1c1b19;--mv:#1c1b19;--mu:#999}
+*{box-sizing:border-box}
+body{margin:0;font-family:Segoe UI,system-ui,sans-serif;background:var(--bg);color:var(--tx);display:flex;justify-content:center;padding:16px}
+#app{display:flex;flex-wrap:wrap;gap:20px;justify-content:center;max-width:920px;width:100%}
+#board{display:grid;grid-template:repeat(8,1fr)/repeat(8,1fr);width:min(92vw,560px);aspect-ratio:1;border:6px solid var(--bb);border-radius:4px;user-select:none;touch-action:manipulation}
+.sq{position:relative;display:flex;align-items:center;justify-content:center;font-size:min(8vw,50px);cursor:pointer;line-height:1}
+.l{background:var(--lt)}.d{background:var(--dk)}
+.last{box-shadow:inset 0 0 0 100px rgba(205,210,106,.55)}
+.sel{box-shadow:inset 0 0 0 100px rgba(246,246,105,.65)}
+.chk{box-shadow:inset 0 0 0 100px rgba(235,64,52,.65)}
+.pc{display:block}
+.pc.w{color:#fff;text-shadow:0 0 2px #000,0 0 2px #000,0 0 3px #000}
+.pc.b{color:#222;text-shadow:0 0 2px #ddd,0 0 1px #ddd}
+.dot::after{content:"";position:absolute;width:30%;height:30%;border-radius:50%;background:rgba(20,20,20,.3);pointer-events:none}
+.cap::after{content:"";position:absolute;inset:4%;border-radius:50%;border:5px solid rgba(20,20,20,.3);pointer-events:none}
+.co{position:absolute;font:700 10px sans-serif;opacity:.75;color:#222;pointer-events:none}
+.co.r{top:2px;left:3px}.co.f{bottom:2px;right:3px}
+#side{width:280px;display:flex;flex-direction:column;gap:9px}
+#st{font-size:18px;font-weight:700;min-height:26px}
+#fb{font-size:15px;font-weight:700;min-height:44px;white-space:pre-line}
+select,button,input[type=range]{font-size:14px}
+select,button{padding:8px;border-radius:6px;border:1px solid var(--bd);background:var(--ctl);color:var(--tx)}
+button{cursor:pointer}button:disabled{opacity:.45;cursor:default}
+.row{display:flex;gap:8px}.row>*{flex:1;min-width:0}
+.cap2{font-size:12px;color:var(--mu);margin-bottom:-4px}
+#rt{font-weight:700;font-size:14px}
+#eng{font-size:12px;color:var(--mu)}
+#moves{flex:1;min-height:180px;max-height:320px;overflow:auto;background:var(--mv);border:1px solid var(--bd);border-radius:6px;padding:8px;font-family:Consolas,monospace;font-size:14px;line-height:1.6}
+#moves b{color:var(--mu);font-weight:400}
+#promo{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;z-index:50}
+#promo div{background:var(--ctl);padding:16px;border-radius:10px;display:flex;gap:10px}
+#promo button{font-size:44px;width:72px;height:72px;padding:0}
+label{font-size:14px}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="board"></div>
+  <div id="side">
+    <div id="st"></div>
+    <div id="fb"></div>
+    <select id="mode"><option value="ai">Gra z komputerem (Stockfish)</option><option value="2p">2 graczy (bez AI)</option></select>
+    <div class="cap2">Siła komputera (Elo): <b id="eloV"></b></div>
+    <input type="range" id="elo" min="1320" max="3190" step="10" value="1600">
+    <div class="row">
+      <div><div class="cap2">Twój kolor (nowa gra)</div><select id="side2" style="width:100%"><option value="w">Białe</option><option value="b">Czarne</option></select></div>
+      <div><div class="cap2">Motyw</div><select id="theme" style="width:100%"><option value="light">Jasny</option><option value="dark">Ciemny</option></select></div>
+    </div>
+    <div><div class="cap2">Tempo komputera</div><select id="speed" style="width:100%"><option value="0">Spokojne</option><option value="1">Normalne</option><option value="2">Szybkie</option></select></div>
+    <label><input type="checkbox" id="hint" checked> Pokazuj podpowiedzi ruchów</label>
+    <div class="row"><button id="new">Nowa gra</button><button id="undo">Cofnij</button><button id="resign">Poddaj się</button></div>
+    <div id="rt"></div>
+    <div id="eng">Ładowanie silnika…</div>
+    <div id="moves"></div>
+  </div>
+</div>
+<div id="promo"><div id="pbtns"></div></div>
+
+<script>
+/* ======================= USTAWIENIA SILNIKA =======================
+   Pliki Stockfisha (.js i .wasm) trzymaj w tym samym folderze co index.html.
+   Strona próbuje po kolei załadować jeden z tych plików.
+   Jeśli Twój plik nazywa się inaczej – dopisz jego nazwę na początku listy. */
+const ENGINE_FILES=["stockfish-19-lite-single.js","stockfish-18-lite-single.js","stockfish.js"];
+
+// ======================= SILNIK REGUŁ =======================
+// plansza: indeks = rząd*8+kolumna, rząd 0 = 8. linia; białe >0, czarne <0
+const P=1,N=2,B=3,R=4,Q=5,K=6;
+const DR=[-1,-1,-1,0,0,1,1,1],DC=[-1,0,1,-1,1,-1,0,1],KR=[-2,-2,-1,-1,1,1,2,2],KC=[-1,1,-2,2,-2,2,-1,1];
+const start=()=>{const b=Array(64).fill(0),k=[R,N,B,Q,K,B,N,R];for(let c=0;c<8;c++){b[c]=-k[c];b[8+c]=-P;b[48+c]=P;b[56+c]=k[c]}return{b,w:true,c:[1,1,1,1],ep:-1}};
+const cl=s=>({b:s.b.slice(),w:s.w,c:s.c.slice(),ep:s.ep});
+const sgn=Math.sign,abs=Math.abs;
+function att(s,sq,byW){
+  const r=sq>>3,c=sq&7,o=byW?1:-1,b=s.b,pr=byW?r+1:r-1;
+  if(pr>=0&&pr<8)for(const dc of[-1,1]){const pc=c+dc;if(pc>=0&&pc<8&&b[pr*8+pc]==o*P)return true}
+  for(let i=0;i<8;i++){const nr=r+KR[i],nc=c+KC[i];if(nr>=0&&nr<8&&nc>=0&&nc<8&&b[nr*8+nc]==o*N)return true}
+  for(let d=0;d<8;d++){
+    const dg=DR[d]&&DC[d];let rr=r+DR[d],cc=c+DC[d],st=1;
+    while(rr>=0&&rr<8&&cc>=0&&cc<8){const p=b[rr*8+cc];
+      if(p){if(st==1&&p==o*K)return true;if(p==o*Q||p==o*(dg?B:R))return true;break}
+      rr+=DR[d];cc+=DC[d];st++}
+  }
+  return false;
+}
+const kingSq=(s,w)=>s.b.indexOf(w?K:-K);
+const inCheck=(s,w)=>att(s,kingSq(s,w),!w);
+function apply(s,m){ // m:{f,t,p,k} k: 0 zwykły,1 podwójny pionek,2 bicie w przelocie,3 roszada krótka,4 długa
+  const n=cl(s),pc=n.b[m.f],t=abs(pc),sg=sgn(pc);
+  n.b[m.t]=pc;n.b[m.f]=0;n.ep=-1;
+  if(m.k==1)n.ep=(m.f+m.t)/2;
+  if(m.k==2)n.b[m.t+(sg>0?8:-8)]=0;
+  if(m.k==3){n.b[m.f+1]=n.b[m.f+3];n.b[m.f+3]=0}
+  if(m.k==4){n.b[m.f-1]=n.b[m.f-4];n.b[m.f-4]=0}
+  if(m.p)n.b[m.t]=sg*m.p;
+  if(t==K){if(sg>0)n.c[0]=n.c[1]=0;else n.c[2]=n.c[3]=0}
+  for(const q of[m.f,m.t]){if(q==63)n.c[0]=0;if(q==56)n.c[1]=0;if(q==7)n.c[2]=0;if(q==0)n.c[3]=0}
+  n.w=!s.w;return n;
+}
+function pseudo(s){
+  const L=[],b=s.b,o=s.w?1:-1;
+  const addP=(f,t,pr)=>{if(pr)for(const p of[Q,R,B,N])L.push({f,t,p,k:0});else L.push({f,t,p:0,k:0})};
+  for(let sq=0;sq<64;sq++){
+    const pc=b[sq];if(!pc||sgn(pc)!=o)continue;
+    const t=abs(pc),r=sq>>3,c=sq&7;
+    if(t==P){
+      const dir=-o,nr=r+dir;if(nr<0||nr>7)continue;
+      const pr=nr==(o>0?0:7),sr=o>0?6:1;
+      if(!b[nr*8+c]){addP(sq,nr*8+c,pr);if(r==sr&&!b[(r+2*dir)*8+c])L.push({f:sq,t:(r+2*dir)*8+c,p:0,k:1})}
+      for(const dc of[-1,1]){const nc=c+dc;if(nc<0||nc>7)continue;const to=nr*8+nc;
+        if(b[to]&&sgn(b[to])==-o)addP(sq,to,pr);else if(to==s.ep)L.push({f:sq,t:to,p:0,k:2})}
+    }else if(t==N||t==K){
+      const dr=t==N?KR:DR,dc=t==N?KC:DC;
+      for(let i=0;i<8;i++){const nr=r+dr[i],nc=c+dc[i];if(nr<0||nr>7||nc<0||nc>7)continue;
+        const g=b[nr*8+nc];if(!g||sgn(g)==-o)L.push({f:sq,t:nr*8+nc,p:0,k:0})}
+      if(t==K){
+        const w=o>0,e=!w;
+        if(w&&sq==60){
+          if(s.c[0]&&!b[61]&&!b[62]&&b[63]==R&&!att(s,60,e)&&!att(s,61,e)&&!att(s,62,e))L.push({f:60,t:62,p:0,k:3});
+          if(s.c[1]&&!b[59]&&!b[58]&&!b[57]&&b[56]==R&&!att(s,60,e)&&!att(s,59,e)&&!att(s,58,e))L.push({f:60,t:58,p:0,k:4});
+        }else if(!w&&sq==4){
+          if(s.c[2]&&!b[5]&&!b[6]&&b[7]==-R&&!att(s,4,e)&&!att(s,5,e)&&!att(s,6,e))L.push({f:4,t:6,p:0,k:3});
+          if(s.c[3]&&!b[3]&&!b[2]&&!b[1]&&b[0]==-R&&!att(s,4,e)&&!att(s,3,e)&&!att(s,2,e))L.push({f:4,t:2,p:0,k:4});
+        }
+      }
+    }else{
+      for(let d=0;d<8;d++){
+        const dg=DR[d]&&DC[d];if(t==B&&!dg)continue;if(t==R&&dg)continue;
+        let rr=r+DR[d],cc=c+DC[d];
+        while(rr>=0&&rr<8&&cc>=0&&cc<8){const g=b[rr*8+cc];
+          if(!g)L.push({f:sq,t:rr*8+cc,p:0,k:0});
+          else{if(sgn(g)==-o)L.push({f:sq,t:rr*8+cc,p:0,k:0});break}
+          rr+=DR[d];cc+=DC[d]}
+      }
+    }
+  }
+  return L;
+}
+const legal=s=>pseudo(s).filter(m=>!inCheck(apply(s,m),s.w));
+// ======================= KONIEC SILNIKA REGUŁ =======================
+
+// ----- zapis ruchów -----
+const sqn=i=>"abcdefgh"[i&7]+(8-(i>>3));
+const uci=m=>sqn(m.f)+sqn(m.t)+(m.p?" pnbrq"[m.p]:"");
+function parseUci(s,u){
+  if(!u||u.length<4)return null;
+  const f=(u.charCodeAt(0)-97)+(8-(+u[1]))*8,t=(u.charCodeAt(2)-97)+(8-(+u[3]))*8,p=u.length>4?" pnbrq".indexOf(u[4]):0;
+  return legal(s).find(m=>m.f==f&&m.t==t&&m.p==p)||null;
+}
+
+// ======================= STOCKFISH (UCI przez Web Worker) =======================
+class Uci{
+  constructor(w){this.w=w;this.q=Promise.resolve();this.cb=null;this.eloMin=1320;this.eloMax=3190;
+    w.onmessage=e=>{const l=typeof e.data==="string"?e.data:String(e.data);if(this.cb)this.cb(l.trim())}}
+  static create(url){return new Promise((res,rej)=>{
+    let w;try{w=new Worker(url)}catch(e){return rej(e)}
+    const u=new Uci(w),t=setTimeout(()=>{w.terminate();rej(new Error("timeout"))},25000);
+    w.onerror=e=>{clearTimeout(t);w.terminate();rej(e)};
+    u.cb=l=>{
+      if(l.startsWith("option name UCI_Elo")){const m=l.match(/min (\d+) max (\d+)/);if(m){u.eloMin=+m[1];u.eloMax=+m[2]}}
+      if(l==="uciok"){clearTimeout(t);u.cb=null;w.onerror=null;u.send("setoption name Hash value 32");res(u)}
+    };
+    u.send("uci");
+  })}
+  send(s){this.w.postMessage(s)}
+  search(moves,ms,mpv,elo){
+    const job=()=>new Promise(res=>{
+      const r={best:null,lines:[]};
+      this.cb=l=>{
+        if(l.startsWith("info")&&l.includes(" score ")&&l.includes(" pv "))parseInfo(l,r);
+        else if(l.startsWith("bestmove")){this.cb=null;r.best=l.split(" ")[1];res(r)}
+      };
+      if(elo){this.send("setoption name UCI_LimitStrength value true");this.send("setoption name UCI_Elo value "+Math.min(this.eloMax,Math.max(this.eloMin,elo)))}
+      else this.send("setoption name UCI_LimitStrength value false");
+      this.send("setoption name MultiPV value "+mpv);
+      this.send("position startpos"+(moves.length?" moves "+moves.join(" "):""));
+      this.send("go movetime "+ms);
+    });
+    const p=this.q.then(job,job);this.q=p.catch(()=>{});return p;
+  }
+}
+function parseInfo(line,r){
+  const t=line.split(" ");let idx=1,score=0,has=false,mv=null;
+  for(let i=0;i<t.length-1;i++){
+    if(t[i]==="multipv")idx=+t[i+1];
+    else if(t[i]==="score"){
+      if(t[i+1]==="cp")score=+t[i+2];
+      else if(t[i+1]==="mate"){const n=+t[i+2];score=n>0?10000-n:-10000-n}
+      has=true;
+    }else if(t[i]==="pv"){mv=t[i+1];break}
+  }
+  if(has&&mv&&idx>=1&&idx<6)r.lines[idx]={score,move:mv};
+}
+
+// ======================= SILNIK AWARYJNY (gdy brak plików Stockfisha) =======================
+const VAL=[0,100,320,330,500,900,0];
+function pst(t,w,i){
+  const r=w?i>>3:7-(i>>3),c=i&7,cen=7-Math.abs(c-3.5)-Math.abs(r-3.5);
+  if(t==N)return cen*8-20;if(t==B)return cen*4;
+  if(t==P)return (6-r)*6+(c>2&&c<5?(6-r)*3:0);
+  if(t==K)return r==7?(c==6||c==1||c==2?25:0):-25;
+  return 0;
+}
+function evalW(s){let x=0;for(let i=0;i<64;i++){const p=s.b[i];if(!p)continue;const t=abs(p),v=VAL[t]+pst(t,p>0,i);x+=p>0?v:-v}return x}
+const isCap=(s,m)=>s.b[m.t]!=0||m.k==2;
+const ordSc=(s,m)=>{let x=0;const c=m.k==2?P:abs(s.b[m.t]);if(c)x+=1000+10*VAL[c]-VAL[abs(s.b[m.f])]/10;if(m.p)x+=VAL[m.p];return x};
+const order=(s,ms)=>ms.map(m=>[ordSc(s,m),m]).sort((a,b)=>b[0]-a[0]).map(x=>x[1]);
+function quiesce(s,a,b,qd){
+  const e=evalW(s),st=s.w?e:-e;
+  if(st>=b)return b;if(st>a)a=st;if(qd==0)return a;
+  for(const m of order(s,legal(s).filter(m=>isCap(s,m)||m.p))){
+    const x=-quiesce(apply(s,m),-b,-a,qd-1);if(x>=b)return b;if(x>a)a=x}
+  return a;
+}
+function nega(s,d,a,b,ply){
+  if(d<=0)return quiesce(s,a,b,4);
+  const ms=legal(s);if(!ms.length)return inCheck(s,s.w)?-30000+ply:0;
+  for(const m of order(s,ms)){const x=-nega(apply(s,m),d-1,-b,-a,ply+1);if(x>=b)return b;if(x>a)a=x}
+  return a;
+}
+function fbBest(s,depth){
+  let ms=legal(s);
+  for(let i=ms.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[ms[i],ms[j]]=[ms[j],ms[i]]}
+  ms=order(s,ms);let bm=ms[0],a=-100000;
+  for(const m of ms){const x=-nega(apply(s,m),depth-1,-100000,-a,1);if(x>a){a=x;bm=m}}
+  return bm;
+}
+function fbAnalyze(s){
+  const sc=legal(s).map(m=>({move:uci(m),score:-nega(apply(s,m),1,-100000,100000,1)})).sort((a,b)=>b.score-a.score);
+  const r={best:sc[0]?sc[0].move:null,lines:[]};if(sc[0])r.lines[1]=sc[0];if(sc[1])r.lines[2]=sc[1];return r;
+}
+
+// ======================= STAN I USTAWIENIA =======================
+const $=id=>document.getElementById(id);
+const store={
+  get(k,d){try{const v=localStorage.getItem("szachy."+k);return v===null?d:JSON.parse(v)}catch(e){return d}},
+  set(k,v){try{localStorage.setItem("szachy."+k,JSON.stringify(v))}catch(e){}}
+};
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const tick=()=>new Promise(r=>setTimeout(r,20));
+const rnd=a=>a[Math.floor(Math.random()*a.length)];
+const GL=["","♟","♞","♝","♜","♛","♚"],LT=["","","S","G","W","H","K"];
+const MIN_THINK=[1800,800,100],ANIM=[650,380,120];
+
+let sfPlay=null,sfAna=null,engineReady=false;
+let H,mv,nt,sel,hints,human,busy,gid=0,L=[],over,resigned,ratingApplied,praise="",ratingInfo=null,praiseColor="",beforeP=null,beforeKey=-1;
+const cur=()=>H[H.length-1];
+const aiOn=()=>$("mode").value==="ai";
+const humanTurn=()=>!aiOn()||cur().w==human;
+const flipped=()=>aiOn()&&!human;
+
+function notate(s,m){
+  if(m.k==3)return"O-O";if(m.k==4)return"O-O-O";
+  const cap=s.b[m.t]||m.k==2;
+  return LT[abs(s.b[m.f])]+sqn(m.f)+(cap?"x":"-")+sqn(m.t)+(m.p?"="+LT[m.p]:"");
+}
+
+// ======================= RENDEROWANIE =======================
+function render(){
+  const s=cur();L=legal(s);
+  const chk=inCheck(s,s.w);
+  over=!L.length||resigned;
+  $("st").textContent=resigned?"Poddałeś partię.":!L.length?(chk?"Szach mat! Wygrywają "+(s.w?"czarne":"białe")+".":"Pat – remis."):
+    "Ruch: "+(s.w?"białe":"czarne")+(chk?" – SZACH!":"");
+  if(over&&!ratingApplied&&aiOn()&&mv.length>0){
+    finishGame(resigned?0:(chk?((s.w!==human)?1:0):0.5));
+  }
+  $("resign").disabled=over||!aiOn()||mv.length==0||busy;
+  const fl=flipped(),last=mv[mv.length-1],ks=chk?kingSq(s,s.w):-1,showH=$("hint").checked&&sel>=0;
+  let h="";
+  for(let dr=0;dr<8;dr++)for(let dc=0;dc<8;dc++){
+    const r=fl?7-dr:dr,c=fl?7-dc:dc,i=r*8+c,p=s.b[i];
+    let cls="sq "+((r+c)%2?"d":"l");
+    if(last&&(last.f==i||last.t==i))cls+=" last";
+    if(i==sel)cls+=" sel";
+    if(i==ks)cls+=" chk";
+    if(showH){const hm=hints.find(m=>m.t==i);if(hm)cls+=(p||hm.k==2)?" cap":" dot"}
+    h+=`<div class="${cls}" data-i="${i}">`+
+      (dc==0?`<span class="co r">${8-r}</span>`:"")+(dr==7?`<span class="co f">${"abcdefgh"[c]}</span>`:"")+
+      (p?`<span class="pc ${p>0?"w":"b"}">${GL[abs(p)]}\uFE0E</span>`:"")+`</div>`;
+  }
+  $("board").innerHTML=h;
+  renderMoves();renderFeedback();
+  // analiza pozycji w tle, gdy gracz myśli (do oceny jego ruchu)
+  if(engineReady&&!over&&humanTurn()&&beforeKey!==H.length){beforeKey=H.length;beforeP=searchAna(mv.map(uci),s,500,2)}
+}
+function renderMoves(){
+  let t="";nt.forEach((n,i)=>{t+=(i%2==0?`<b>${i/2+1}.</b> `:"")+n+(i%2?"<br>":"&nbsp;&nbsp;")});
+  $("moves").innerHTML=t;$("moves").scrollTop=1e6;
+}
+function renderFeedback(){
+  $("fb").style.color=praiseColor;
+  $("fb").textContent=praise+(ratingInfo?"\n"+ratingInfo:"");
+}
+function renderRating(){
+  $("rt").textContent="Twój ranking Elo: "+Math.round(store.get("rating",1200))+"  (partie: "+store.get("games",0)+")";
+}
+
+// ======================= SILNIK: WYSZUKIWANIE =======================
+async function searchPlay(uciMoves,s,elo,ms){
+  if(sfPlay){const r=await sfPlay.search(uciMoves,ms,1,elo);return r.best}
+  await tick();
+  return uci(fbBest(s,elo<1500?1:elo<2100?2:3));
+}
+async function searchAna(uciMoves,s,ms,mpv){
+  if(sfAna)return sfAna.search(uciMoves,ms,mpv,null);
+  await tick();return fbAnalyze(s);
+}
+
+// ======================= PRZEBIEG GRY =======================
+function play(m,rate){
+  const b=cur(),a=apply(b,m),chk=inCheck(a,a.w),none=!legal(a).length;
+  let bp=null;
+  if(rate&&beforeP&&beforeKey===H.length)bp=beforeP;
+  beforeP=null;beforeKey=-1;
+  nt.push(notate(b,m)+(none?(chk?"#":""):(chk?"+":"")));
+  mv.push(m);H.push(a);sel=-1;hints=[];
+  const idx=nt.length-1;
+  render();
+  if(bp)rateMove(bp,b,m,idx,none&&chk,none&&!chk,a);
+  aiMove();
+}
+
+async function aiMove(){
+  if(!engineReady||over||!aiOn()||busy||humanTurn())return;
+  busy=true;
+  const id=gid,s=cur(),um=mv.map(uci),sp=+$("speed").value,elo=+$("elo").value;
+  $("st").textContent="Komputer myśli…";
+  $("resign").disabled=true;
+  let m;
+  try{
+    const t0=Date.now();
+    const u=await searchPlay(um,s,elo,700);
+    m=parseUci(s,u)||rnd(legal(s));
+    const w=MIN_THINK[sp]-(Date.now()-t0);       // sztuczna pauza – komputer nie rusza się natychmiast
+    if(w>0)await sleep(w);
+  }catch(e){if(id==gid){busy=false;$("st").textContent="Błąd silnika."}return}
+  if(id!=gid)return;
+  animate(m,ANIM[sp],()=>{if(id!=gid)return;busy=false;play(m,false)});
+}
+
+function animate(m,ms,done){
+  const fe=$("board").querySelector(`[data-i="${m.f}"] .pc`),te=$("board").querySelector(`[data-i="${m.t}"]`);
+  if(!fe||!te){done();return}
+  const a=fe.getBoundingClientRect(),b=te.getBoundingClientRect();
+  fe.parentElement.style.zIndex=5;
+  fe.style.transition=`transform ${ms}ms cubic-bezier(.2,.8,.2,1)`;
+  requestAnimationFrame(()=>requestAnimationFrame(()=>{fe.style.transform=`translate(${b.left-a.left}px,${b.top-a.top}px)`}));
+  setTimeout(done,ms+40);
+}
+
+// ======================= OCENA RUCHU GRACZA =======================
+async function rateMove(bp,before,m,idx,mate,draw,after){
+  const id=gid,pu=uci(m);
+  try{
+    const b=await bp;
+    if(!b||!b.lines[1])return;
+    let evalAfter;
+    if(mate)evalAfter=10000;else if(draw)evalAfter=0;
+    else{
+      const a=await searchAna(mv.slice(0,idx+1).map(uci),after,350,1);
+      if(!a||!a.lines[1])return;
+      evalAfter=-a.lines[1].score;        // wynik dotyczy strony, która ma teraz ruch
+    }
+    if(id!=gid||idx>=mv.length||uci(mv[idx])!==pu)return;
+    if(!b.lines[2]&&!mate){setPraise("Jedyny możliwy ruch","#888");return}
+    const Cl=v=>Math.max(-1000,Math.min(1000,v));
+    const best=Cl(b.lines[1].score),aft=Cl(evalAfter),loss=Math.max(0,best-aft);
+    const isBest=pu===b.lines[1].move,gap=b.lines[2]?best-Cl(b.lines[2].score):0;
+    let text,sym="",col;
+    if(mate){text="Szach mat! Genialne zakończenie!!";sym="!!";col="#00aaa0"}
+    else if(isBest&&gap>=250&&best>-300){text=rnd(["Genialny ruch!!","Genialne! Tego nikt się nie spodziewał!!","Brawo – genialny ruch!!"]);sym="!!";col="#00aaa0"}
+    else if(isBest&&gap>=120){text=rnd(["Świetny ruch!","Znakomity wybór!","Bardzo mocny ruch!"]);sym="!";col="#46aa46"}
+    else if(isBest){text=rnd(["Najlepszy ruch","Dokładnie to, co poleca silnik","Perfekcyjnie"]);col="#46aa46"}
+    else if(loss<=15){text=rnd(["Bardzo dobry ruch","Solidnie zagrane"]);col="#6eaf46"}
+    else if(loss<=50){text=rnd(["Dobry ruch","Całkiem nieźle"]);col="#8caa3c"}
+    else if(loss<=100){text="Niedokładność ?!";sym="?!";col="#cda000"}
+    else if(loss<=250){text="Błąd ?";sym="?";col="#e67814"}
+    else{text="Poważny błąd ??";sym="??";col="#dc3232"}
+    if(loss>50&&!isBest){const bm=parseUci(before,b.lines[1].move);if(bm)text+="\nLepsze było: "+notate(before,bm)}
+    nt[idx]+=sym;renderMoves();setPraise(text,col);
+  }catch(e){}
+}
+function setPraise(t,c){praise=t;praiseColor=c;renderFeedback()}
+
+// ======================= RANKING ELO GRACZA =======================
+function finishGame(score){
+  ratingApplied=true;
+  const ra=store.get("rating",1200),rb=+$("elo").value,games=store.get("games",0);
+  const exp=1/(1+Math.pow(10,(rb-ra)/400)),k=games<30?40:20,nr=ra+k*(score-exp);
+  store.set("rating",nr);store.set("games",games+1);
+  const d=Math.round(nr)-Math.round(ra);
+  ratingInfo=(score==1?"Wygrana!":score==0?"Przegrana.":"Remis.")+" Ranking: "+Math.round(ra)+" → "+Math.round(nr)+" ("+(d>0?"+":"")+d+")";
+  praiseColor=score==1?"#46aa46":score==0?"#dc3232":"#888";
+  renderRating();
+}
+function resign(){
+  if(over||!aiOn()||!mv.length||busy)return;
+  if(!confirm("Czy na pewno chcesz się poddać? Partia zostanie zaliczona jako przegrana."))return;
+  resigned=true;render();
+}
+
+// ======================= OBSŁUGA UI =======================
+function askPromo(w,cb){
+  $("pbtns").innerHTML=[Q,R,B,N].map(p=>`<button data-p="${p}">${GL[p]}\uFE0E</button>`).join("");
+  $("pbtns").querySelectorAll("button").forEach(b=>{b.style.color=w?"#fff":"#222";b.style.textShadow=w?"0 0 3px #000":"0 0 2px #ddd";
+    b.onclick=()=>{$("promo").style.display="none";cb(+b.dataset.p)}});
+  $("promo").style.display="flex";
+}
+$("board").addEventListener("click",e=>{
+  const el=e.target.closest(".sq");if(!el||busy||over||!humanTurn())return;
+  const i=+el.dataset.i,s=cur();
+  if(sel>=0){
+    const c=L.filter(m=>m.f==sel&&m.t==i);
+    if(c.length){
+      if(c.length>1)askPromo(s.w,p=>play(c.find(m=>m.p==p),true));else play(c[0],true);
+      return;
+    }
+  }
+  const p=s.b[i];
+  if(p&&(p>0)==s.w){sel=i;hints=L.filter(m=>m.f==i)}else{sel=-1;hints=[]}
+  render();
+});
+function newGame(){
+  gid++;busy=false;H=[start()];mv=[];nt=[];sel=-1;hints=[];
+  resigned=false;ratingApplied=false;ratingInfo=null;praise="";beforeP=null;beforeKey=-1;
+  human=$("side2").value=="w";render();aiMove();
+}
+function undo(){
+  if(busy||H.length<2||(over&&ratingApplied))return;
+  do{H.pop();mv.pop();nt.pop()}while(aiOn()&&!humanTurn()&&H.length>1);
+  sel=-1;hints=[];beforeP=null;beforeKey=-1;praise="";
+  render();aiMove();
+}
+function applyTheme(){document.documentElement.setAttribute("data-theme",$("theme").value)}
+
+$("new").onclick=newGame;$("undo").onclick=undo;$("resign").onclick=resign;
+$("hint").onchange=render;
+$("mode").onchange=()=>{render();aiMove()};
+$("elo").oninput=()=>{$("eloV").textContent=$("elo").value;store.set("elo",+$("elo").value)};
+$("speed").onchange=()=>store.set("speed",+$("speed").value);
+$("theme").onchange=()=>{store.set("theme",$("theme").value);applyTheme()};
+
+// ======================= START =======================
+async function init(){
+  $("theme").value=store.get("theme",matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");
+  $("speed").value=store.get("speed",0);
+  $("elo").value=store.get("elo",1600);$("eloV").textContent=$("elo").value;
+  applyTheme();renderRating();newGame();
+
+  for(const f of ENGINE_FILES){
+    try{
+      sfPlay=await Uci.create(f);
+      try{sfAna=await Uci.create(f)}catch(e){sfAna=null}
+      $("eng").textContent="Silnik: Stockfish ("+f+")";
+      $("elo").min=sfPlay.eloMin;$("elo").max=sfPlay.eloMax;
+      if(+$("elo").value<sfPlay.eloMin)$("elo").value=sfPlay.eloMin;
+      $("eloV").textContent=$("elo").value;
+      break;
+    }catch(e){sfPlay=null}
+  }
+  if(!sfPlay)$("eng").textContent="Tryb awaryjny: nie znaleziono plików Stockfisha – gra prostszy, wbudowany silnik (Elo orientacyjne).";
+  engineReady=true;
+  beforeKey=-1;render();   // od teraz analiza w tle działa na właściwym silniku
+  aiMove();
+}
+init();
+</script>
+</body>
+</html>
