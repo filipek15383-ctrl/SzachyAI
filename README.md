@@ -1,0 +1,2 @@
+# SzachyAI
+szachyAI
